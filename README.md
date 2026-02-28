@@ -1,1 +1,0 @@
-# student-portal-tkinter-sqlite
