@@ -1,3 +1,7 @@
+import matplotlib.pyplot as plt
+from datetime import datetime
+import csv
+
 def get_topper(data):
     if not data:
         return "NO DATA FOUND"
@@ -46,53 +50,22 @@ def calculate_pass_percentage(data):
             failed_students.append(details["Name"])
     return passe, fail, failed_students
 
-student_records = {
-    "Roll1":{
-        "Name":"Aman",
-        "ECO":40,
-        "DSD":35,
-        "Maths":51,
-        "DS":18,
-        "Python":12,
-        "Total":105
-    },
-    "Roll2":{
-        "Name":"Monu",
-        "ECO":60,
-        "DSD":55,
-        "Maths":72,
-        "DS":68,
-        "Python":74,
-        "Total":329
-    },
-    "Roll3":{
-        "Name":"Neha",
-        "ECO":70,
-        "DSD":75,
-        "Maths":85,
-        "DS":80,
-        "Python":77,
-        "Total":387
-    },
-    "Roll4":{
-        "Name":"Priya",
-        "ECO":92,
-        "DSD":91,
-        "Maths":97,
-        "DS":95,
-        "Python":94,
-        "Total":469
-    },
-    "Roll5":{
-        "Name":"Sameer",
-        "ECO":85,
-        "DSD":70,
-        "Maths":90,
-        "DS":75,
-        "Python":88,
-        "Total":408
-    }
-}
+current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+student_records= {}
+with open("database.csv", mode="r") as file:
+    csv_reader=csv.DictReader(file)
+    for row in csv_reader:
+        Roll_no = row.pop('Roll_no')
+        name = row['Name']
+        running_total = 0
+        for key in list(row.keys()):
+            if key != "Name":
+                value_as_int = int(row[key])
+                row[key] = value_as_int
+                running_total += value_as_int
+        row['Total'] = running_total
+        student_records[Roll_no] = row
+
 Topper,Topper_score=get_topper(student_records)
 print("Topper:", Topper,"-> With highest score:",Topper_score)
 
@@ -105,11 +78,6 @@ print("Class Average:", class_average)
 passe,fail,failed_students= calculate_pass_percentage(student_records)
 print("Pass Percentage:",(passe*100)/(passe+fail), "%")
 print("Failed students are:",failed_students)
-
-import matplotlib.pyplot as plt
-from datetime import datetime
-current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 
 x=[]
 y=[]
@@ -154,8 +122,3 @@ plt.text(0.05, 0.05, f"Timestamp: {current_time}",
 plt.tight_layout()
 plt.savefig("Studant_graph.png")
 plt.show()
-
-# git add .
-# git commit -m "Finished the initial layout for result.py"
-# git push
-# git push origin --delete nupur-task
