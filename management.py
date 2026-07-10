@@ -1,294 +1,993 @@
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 import sqlite3
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib
+matplotlib.use("TkAgg")
 
-# =============================================
-#   STUDENT PORTAL - navigation.py
-#   Member 2 : Divyanshu (Navigation System)
-# =============================================
+from database import (
+    insert_student,
+    fetch_student_by_roll,
+    get_student_id_by_roll,
+    get_marks_by_student,
+    save_student_marks,
+    get_top_rankers,
+    get_pass_fail_stats,
+)
+from export import export_real_data
 
-root = tk.Tk()
-root.title("Student Portal")
-root.geometry("700x500")
-root.config(bg="#1e1e2e")
-root.resizable(False, False)
 
-# =============================================
-#   DATABASE SETUP (basic, helps Tanvi too)
-# =============================================
+# ═══════════════════════════════════════════════════
+#  GLOBAL STATE
+# ═══════════════════════════════════════════════════
+
+root       = None
+login_root = None
+current_username = ""
+current_role     = ""
+
+
+# ═══════════════════════════════════════════════════
+#  DATABASE INIT
+# ═══════════════════════════════════════════════════
+
 def init_db():
     conn = sqlite3.connect("student_portal.db")
-    cursor = conn.cursor()
-
-    # Users table
-    cursor.execute("""
+    c = conn.cursor()
+    c.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT NOT NULL
-        )
-    """)
-
-    # Students table
-    cursor.execute("""
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT    NOT NULL UNIQUE,
+            password TEXT    NOT NULL,
+            role     TEXT    NOT NULL
+        )""")
+    c.execute("""
         CREATE TABLE IF NOT EXISTS students (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            roll_no TEXT,
-            branch TEXT
-        )
-    """)
-
-    # Marks table
-    cursor.execute("""
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            name    TEXT NOT NULL,
+            roll_no TEXT NOT NULL UNIQUE,
+            course  TEXT NOT NULL
+        )""")
+    c.execute("""
         CREATE TABLE IF NOT EXISTS marks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
             student_id INTEGER,
-            subject TEXT,
-            marks INTEGER
+            subject    TEXT    NOT NULL,
+            marks      INTEGER NOT NULL,
+            UNIQUE(student_id, subject),
+            FOREIGN KEY (student_id) REFERENCES students(id)
+        )""")
+    c.execute("SELECT id FROM users WHERE username = ?", ("admin",))
+    if not c.fetchone():
+        c.execute(
+            "INSERT INTO users (username, password, role) VALUES (?,?,?)",
+            ("admin", "admin123", "admin"),
         )
-    """)
-
-    # Insert default admin if not exists
-    cursor.execute("SELECT * FROM users WHERE username='admin'")
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO users (username, password, role) VALUES ('admin', 'admin123', 'admin')")
-
     conn.commit()
     conn.close()
 
-# =============================================
-#   SHOW FRAME FUNCTION (your main job)
-# =============================================
-def show_frame(frame):
-    # Hide all frames
-    login_frame.pack_forget()
-    admin_frame.pack_forget()
-    student_frame.pack_forget()
 
-    # Show the chosen frame
-    frame.pack(fill="both", expand=True)
+# ═══════════════════════════════════════════════════
+#  DESIGN TOKENS  —  dark "slate-ink" theme
+# ═══════════════════════════════════════════════════
 
-# =============================================
-#   LOGIN LOGIC (connected with show_frame)
-# =============================================
-def handle_login():
-    username = username_entry.get().strip()
-    password = password_entry.get().strip()
+BG       = "#0D1117"   # GitHub-dark base
+PANEL    = "#161B22"   # slightly lighter panel
+CARD     = "#21262D"   # card surface
+BORDER   = "#30363D"   # subtle border
+ACCENT   = "#58A6FF"   # electric blue
+ACCENT2  = "#3FB950"   # emerald green  (student accent)
+WARN     = "#D29922"   # amber
+DANGER   = "#F85149"   # red
+TEXT     = "#E6EDF3"   # near-white
+SUBTEXT  = "#8B949E"   # muted
+HOVER    = "#1F6FEB"   # deeper blue hover
 
-    if username == "" or password == "":
-        messagebox.showwarning("Empty Fields", "Please enter username and password!")
-        return
+FT       = ("Consolas", 11)
+FT_TITLE = ("Consolas", 20, "bold")
+FT_HEAD  = ("Consolas", 13, "bold")
+FT_SMALL = ("Consolas", 9)
+FT_MONO  = ("Consolas", 10)
 
-    conn = sqlite3.connect("student_portal.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT role FROM users WHERE username=? AND password=?", (username, password))
-    result = cursor.fetchone()
-    conn.close()
 
-    if result:
-        role = result[0]
-        if role == "admin":
-            admin_name_label.config(text=f"Welcome, {username}  (Admin)")
-            show_frame(admin_frame)
-        else:
-            student_name_label.config(text=f"Welcome, {username}  (Student)")
-            show_frame(student_frame)
-        # Clear fields after login
-        username_entry.delete(0, tk.END)
-        password_entry.delete(0, tk.END)
-    else:
-        messagebox.showerror("Login Failed", "Invalid username or password!")
+# ═══════════════════════════════════════════════════
+#  HELPERS
+# ═══════════════════════════════════════════════════
 
-def handle_logout():
-    show_frame(login_frame)
+def _center(win, w, h):
+    win.update_idletasks()
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    win.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
-# =============================================
-#   COLORS & FONTS
-# =============================================
-BG       = "#1e1e2e"
-CARD     = "#2a2a3e"
-ACCENT   = "#7c3aed"
-BTN_CLR  = "#7c3aed"
-BTN_HOV  = "#5b21b6"
-TEXT     = "#ffffff"
-SUBTEXT  = "#a0a0b0"
-SUCCESS  = "#22c55e"
-DANGER   = "#ef4444"
 
-FONT_TITLE  = ("Courier New", 22, "bold")
-FONT_LABEL  = ("Courier New", 11)
-FONT_BTN    = ("Courier New", 11, "bold")
-FONT_SMALL  = ("Courier New", 9)
+def _sep(parent, color=BORDER):
+    tk.Frame(parent, bg=color, height=1).pack(fill="x", padx=0, pady=6)
 
-# Hover effect helper
-def on_enter(btn, color=BTN_HOV):
-    btn.config(bg=color)
 
-def on_leave(btn, color=BTN_CLR):
-    btn.config(bg=color)
+def _card(parent, **kw):
+    """Raised card frame."""
+    return tk.Frame(parent, bg=CARD, highlightbackground=BORDER,
+                    highlightthickness=1, **kw)
 
-def styled_button(parent, text, command, bg=BTN_CLR, fg=TEXT, width=22):
-    btn = tk.Button(parent, text=text, command=command,
-                    bg=bg, fg=fg, font=FONT_BTN,
-                    relief="flat", cursor="hand2",
-                    width=width, pady=8)
-    btn.bind("<Enter>", lambda e: on_enter(btn, BTN_HOV if bg == BTN_CLR else bg))
-    btn.bind("<Leave>", lambda e: on_leave(btn, bg))
-    return btn
 
-# =============================================
-#   FRAME 1 — LOGIN FRAME
-# =============================================
-login_frame = tk.Frame(root, bg=BG)
-
-# Title
-tk.Label(login_frame, text="🎓 STUDENT PORTAL",
-         font=FONT_TITLE, bg=BG, fg=ACCENT).pack(pady=(50, 5))
-tk.Label(login_frame, text="Sign in to continue",
-         font=FONT_SMALL, bg=BG, fg=SUBTEXT).pack(pady=(0, 30))
-
-# Card frame
-card = tk.Frame(login_frame, bg=CARD, padx=40, pady=30)
-card.pack()
-
-# Username
-tk.Label(card, text="Username", font=FONT_LABEL, bg=CARD, fg=TEXT).grid(row=0, column=0, sticky="w", pady=5)
-username_entry = tk.Entry(card, font=FONT_LABEL, bg="#3a3a4e", fg=TEXT,
-                          insertbackground=TEXT, relief="flat", width=28)
-username_entry.grid(row=1, column=0, ipady=8, pady=(0, 15))
-
-# Password
-tk.Label(card, text="Password", font=FONT_LABEL, bg=CARD, fg=TEXT).grid(row=2, column=0, sticky="w", pady=5)
-password_entry = tk.Entry(card, font=FONT_LABEL, bg="#3a3a4e", fg=TEXT,
-                           insertbackground=TEXT, relief="flat", width=28, show="*")
-password_entry.grid(row=3, column=0, ipady=8, pady=(0, 20))
-
-# Login Button
-login_btn = styled_button(card, "🔐  LOGIN", handle_login, width=28)
-login_btn.grid(row=4, column=0, pady=5)
-
-# Hint
-tk.Label(login_frame, text="Default admin → username: admin  |  password: admin123",
-         font=FONT_SMALL, bg=BG, fg=SUBTEXT).pack(pady=(15, 0))
-
-# Enter key also triggers login
-root.bind("<Return>", lambda event: handle_login())
-
-# =============================================
-#   FRAME 2 — ADMIN DASHBOARD FRAME
-# =============================================
-admin_frame = tk.Frame(root, bg=BG)
-
-# Top bar
-top_bar = tk.Frame(admin_frame, bg=CARD, height=55)
-top_bar.pack(fill="x")
-top_bar.pack_propagate(False)
-
-admin_name_label = tk.Label(top_bar, text="Welcome, Admin",
-                             font=FONT_LABEL, bg=CARD, fg=TEXT)
-admin_name_label.pack(side="left", padx=20, pady=15)
-
-logout_btn1 = styled_button(top_bar, "Logout", handle_logout, bg=DANGER, width=10)
-logout_btn1.pack(side="right", padx=20, pady=10)
-
-# Sidebar + Content layout
-body = tk.Frame(admin_frame, bg=BG)
-body.pack(fill="both", expand=True)
-
-sidebar = tk.Frame(body, bg=CARD, width=180)
-sidebar.pack(side="left", fill="y")
-sidebar.pack_propagate(False)
-
-content_area = tk.Frame(body, bg=BG)
-content_area.pack(side="left", fill="both", expand=True)
-
-# Sidebar buttons
-tk.Label(sidebar, text="MENU", font=FONT_SMALL, bg=CARD, fg=SUBTEXT).pack(pady=(20, 10))
-
-def sidebar_btn(text):
-    b = tk.Button(sidebar, text=text, font=FONT_SMALL,
-                  bg=CARD, fg=TEXT, relief="flat",
-                  cursor="hand2", width=18, pady=10,
-                  command=lambda: messagebox.showinfo("Info", f"{text} - will be added by your team!"))
-    b.pack(pady=3, padx=10)
-    b.bind("<Enter>", lambda e: b.config(bg=ACCENT))
-    b.bind("<Leave>", lambda e: b.config(bg=CARD))
+def btn(parent, text, cmd, color=ACCENT, fg=BG, w=18, pad=8):
+    """Flat styled button with hover."""
+    b = tk.Button(parent, text=text, command=cmd,
+                  bg=color, fg=fg, font=FT, relief="flat",
+                  cursor="hand2", width=w, pady=pad, bd=0,
+                  activebackground=HOVER, activeforeground=TEXT)
+    b.bind("<Enter>", lambda e: b.config(bg=_darken(color)))
+    b.bind("<Leave>", lambda e: b.config(bg=color))
     return b
 
-sidebar_btn("👤  Add Student")
-sidebar_btn("🔍  Search Student")
-sidebar_btn("📋  Marksheet")
-sidebar_btn("📊  Result Analyzer")
-sidebar_btn("🏆  Top Rankers")
-sidebar_btn("📤  Export Result")
-sidebar_btn("📈  Pass %")
 
-# Content area welcome message
-tk.Label(content_area, text="ADMIN DASHBOARD",
-         font=FONT_TITLE, bg=BG, fg=ACCENT).pack(pady=(60, 10))
-tk.Label(content_area, text="Use the sidebar to manage the student portal.",
-         font=FONT_LABEL, bg=BG, fg=SUBTEXT).pack()
+def _darken(hex_color):
+    """Return a slightly darkened version of a hex colour."""
+    try:
+        r = max(0, int(hex_color[1:3], 16) - 30)
+        g = max(0, int(hex_color[3:5], 16) - 30)
+        b_ = max(0, int(hex_color[5:7], 16) - 30)
+        return f"#{r:02x}{g:02x}{b_:02x}"
+    except Exception:
+        return hex_color
 
-# Stats row (dummy)
-stats_row = tk.Frame(content_area, bg=BG)
-stats_row.pack(pady=30)
 
-def stat_card(parent, title, value, color):
-    f = tk.Frame(parent, bg=CARD, width=130, height=90)
-    f.pack(side="left", padx=10)
-    f.pack_propagate(False)
-    tk.Label(f, text=value, font=("Courier New", 22, "bold"), bg=CARD, fg=color).pack(pady=(15, 2))
-    tk.Label(f, text=title, font=FONT_SMALL, bg=CARD, fg=SUBTEXT).pack()
+def _label(parent, text, font=FT, fg=TEXT, bg=None, **kw):
+    return tk.Label(parent, text=text, font=font, fg=fg,
+                    bg=bg or parent.cget("bg"), **kw)
 
-stat_card(stats_row, "Students",  "0",    SUCCESS)
-stat_card(stats_row, "Subjects",  "0",    ACCENT)
-stat_card(stats_row, "Pass Rate", "0%",   "#f59e0b")
 
-# =============================================
-#   FRAME 3 — STUDENT DASHBOARD FRAME
-# =============================================
-student_frame = tk.Frame(root, bg=BG)
+def _entry(parent, show=None, w=28):
+    e = tk.Entry(parent, show=show, width=w, font=FT,
+                 bg=BG, fg=TEXT, insertbackground=ACCENT,
+                 relief="flat", bd=6,
+                 highlightthickness=1,
+                 highlightbackground=BORDER,
+                 highlightcolor=ACCENT)
+    return e
 
-# Top bar
-top_bar2 = tk.Frame(student_frame, bg=CARD, height=55)
-top_bar2.pack(fill="x")
-top_bar2.pack_propagate(False)
 
-student_name_label = tk.Label(top_bar2, text="Welcome, Student",
-                               font=FONT_LABEL, bg=CARD, fg=TEXT)
-student_name_label.pack(side="left", padx=20, pady=15)
+def _modal(title, w, h):
+    """Create a styled top-level modal."""
+    win = tk.Toplevel(root)
+    win.title(title)
+    win.configure(bg=BG)
+    win.resizable(False, False)
+    win.grab_set()
+    _center(win, w, h)
+    return win
 
-logout_btn2 = styled_button(top_bar2, "Logout", handle_logout, bg=DANGER, width=10)
-logout_btn2.pack(side="right", padx=20, pady=10)
 
-# Student content
-tk.Label(student_frame, text="STUDENT DASHBOARD",
-         font=FONT_TITLE, bg=BG, fg=SUCCESS).pack(pady=(60, 10))
-tk.Label(student_frame, text="View your results and performance here.",
-         font=FONT_LABEL, bg=BG, fg=SUBTEXT).pack(pady=5)
+def _section_header(parent, text):
+    f = tk.Frame(parent, bg=BG)
+    f.pack(fill="x", padx=24, pady=(18, 4))
+    tk.Frame(f, bg=ACCENT, width=4, height=20).pack(side="left")
+    _label(f, f"  {text}", font=FT_HEAD, bg=BG).pack(side="left")
 
-# Student quick buttons
-btn_row = tk.Frame(student_frame, bg=BG)
-btn_row.pack(pady=30)
 
-def stu_btn(text):
-    b = tk.Button(btn_row, text=text, font=FONT_BTN,
-                  bg=CARD, fg=TEXT, relief="flat",
-                  cursor="hand2", width=18, pady=12,
-                  command=lambda: messagebox.showinfo("Info", f"{text} - coming soon!"))
-    b.pack(side="left", padx=10)
-    b.bind("<Enter>", lambda e: b.config(bg=SUCCESS))
-    b.bind("<Leave>", lambda e: b.config(bg=CARD))
+# ═══════════════════════════════════════════════════
+#  TOAST NOTIFICATIONS
+# ═══════════════════════════════════════════════════
 
-stu_btn("📋  My Marksheet")
-stu_btn("📊  My Result")
-stu_btn("🏆  Class Rankers")
+def toast(message, kind="info"):
+    """Small non-blocking toast at bottom-right of root."""
+    colors = {"info": ACCENT, "success": ACCENT2, "error": DANGER, "warn": WARN}
+    color  = colors.get(kind, ACCENT)
 
-# =============================================
-#   START THE APP
-# =============================================
-init_db()          # setup database
-show_frame(login_frame)   # start at login
-root.mainloop()
+    t = tk.Toplevel(root)
+    t.overrideredirect(True)
+    t.attributes("-topmost", True)
+    t.configure(bg=CARD)
+
+    tk.Frame(t, bg=color, width=4).pack(side="left", fill="y")
+    tk.Label(t, text=message, font=FT_SMALL, bg=CARD, fg=TEXT,
+             padx=14, pady=10).pack(side="left")
+
+    root.update_idletasks()
+    rx = root.winfo_x() + root.winfo_width()  - 340
+    ry = root.winfo_y() + root.winfo_height() - 70
+    t.geometry(f"320x42+{rx}+{ry}")
+
+    t.after(3000, t.destroy)
+
+
+# ═══════════════════════════════════════════════════
+#  LIVE STATS (used on admin dashboard)
+# ═══════════════════════════════════════════════════
+
+def _get_live_stats():
+    try:
+        conn = sqlite3.connect("student_portal.db")
+        c    = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM students")
+        stu = c.fetchone()[0]
+        c.execute("SELECT COUNT(DISTINCT subject) FROM marks")
+        sub = c.fetchone()[0]
+        passed, failed = get_pass_fail_stats()
+        total = passed + failed
+        rate  = f"{round(passed/total*100)}%" if total else "—"
+        conn.close()
+        return stu, sub, rate
+    except Exception:
+        return "—", "—", "—"
+
+
+# ═══════════════════════════════════════════════════
+#  MODAL — ADD STUDENT
+# ═══════════════════════════════════════════════════
+
+def open_add_student(refresh_cb=None):
+    win = _modal("Add New Student", 400, 340)
+
+    _label(win, "ADD STUDENT", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(22, 6))
+    _sep(win)
+
+    form = tk.Frame(win, bg=BG)
+    form.pack(padx=30, pady=10, fill="x")
+
+    fields = {}
+    for label in ("Full Name", "Roll Number", "Course"):
+        _label(form, label, fg=SUBTEXT, bg=BG).pack(anchor="w", pady=(8, 2))
+        e = _entry(form)
+        e.pack(fill="x")
+        fields[label] = e
+
+    fields["Full Name"].focus_set()
+
+    status = _label(win, "", fg=DANGER, bg=BG)
+    status.pack()
+
+    def save():
+        name   = fields["Full Name"].get().strip()
+        roll   = fields["Roll Number"].get().strip()
+        course = fields["Course"].get().strip()
+        if not all([name, roll, course]):
+            status.config(text="⚠ All fields are required.")
+            return
+        try:
+            insert_student(name, roll, course)
+            if refresh_cb:
+                refresh_cb()
+            toast(f"Student '{name}' added successfully.", "success")
+            win.destroy()
+        except Exception as e:
+            status.config(text=f"✕ {e}")
+
+    btn_f = tk.Frame(win, bg=BG)
+    btn_f.pack(pady=14)
+    btn(btn_f, "  Save Student", save, color=ACCENT2, fg=BG, w=20).pack(side="left", padx=6)
+    btn(btn_f, "  Cancel", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left")
+
+    win.bind("<Return>", lambda e: save())
+
+
+# ═══════════════════════════════════════════════════
+#  MODAL — ADD / UPDATE MARKS
+# ═══════════════════════════════════════════════════
+
+SUBJECTS = ["Mathematics", "Science", "English", "Computer Science", "History"]
+
+def open_add_marks(refresh_cb=None):
+    win = _modal("Add / Update Marks", 420, 520)
+
+    _label(win, "ADD / UPDATE MARKS", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(12, 4))
+    _sep(win)
+
+    form = tk.Frame(win, bg=BG)
+    form.pack(padx=30, pady=4, fill="x")
+
+    _label(form, "Roll Number", fg=SUBTEXT, bg=BG).pack(anchor="w", pady=(0, 2))
+    roll_e = _entry(form)
+    roll_e.pack(fill="x")
+    roll_e.focus_set()
+
+    subject_entries = {}
+    for subj in SUBJECTS:
+        row = tk.Frame(form, bg=BG)
+        row.pack(fill="x", pady=(3, 0))
+        _label(row, subj, fg=SUBTEXT, bg=BG, w=18, anchor="w").pack(side="left")
+        e = _entry(row, w=8)
+        e.pack(side="left", padx=(6, 0))
+        subject_entries[subj] = e
+
+    status = _label(win, "", fg=DANGER, bg=BG)
+    status.pack(pady=2)
+
+    def save():
+        roll = roll_e.get().strip()
+        if not roll:
+            status.config(text="⚠ Enter a roll number.")
+            return
+        try:
+            student_id = get_student_id_by_roll(roll)
+            if not student_id:
+                status.config(text="✕ Student not found.")
+                return
+
+            subject_marks = {}
+            for subj, entry in subject_entries.items():
+                val = entry.get().strip()
+                if not val:
+                    continue                      # skip blank subjects
+                try:
+                    m = int(val)
+                except ValueError:
+                    status.config(text=f"✕ {subj}: enter a whole number.")
+                    return
+                if not (0 <= m <= 100):
+                    status.config(text=f"✕ {subj}: must be 0–100.")
+                    return
+                subject_marks[subj] = m
+
+            if not subject_marks:
+                status.config(text="⚠ Enter at least one subject's marks.")
+                return
+
+            save_student_marks(student_id, subject_marks)
+            if refresh_cb:
+                refresh_cb()
+            toast("Marks saved successfully.", "success")
+            win.destroy()
+        except Exception as e:
+            status.config(text=f"✕ {e}")
+    
+    btn_f = tk.Frame(win, bg=BG)
+    btn_f.pack(side="bottom", pady=10)
+    btn(btn_f, "  Save Marks", save, color=ACCENT2, fg=BG, w=18).pack(side="left", padx=6)
+    btn(btn_f, "  Cancel", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left")
+    win.bind("<Return>", lambda event: save())
+
+
+# ═══════════════════════════════════════════════════
+#  MODAL — SEARCH STUDENT
+# ═══════════════════════════════════════════════════
+
+def search_student():
+    win = _modal("Search Student", 440, 380)
+
+    _label(win, "SEARCH STUDENT", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(22, 6))
+    _sep(win)
+
+    row = tk.Frame(win, bg=BG)
+    row.pack(padx=30, pady=(8,4), fill="x")
+    _label(row, "Roll Number", fg=SUBTEXT, bg=BG).pack(anchor="w", pady=(0, 4))
+    roll_e = _entry(row)
+    roll_e.pack(fill="x")
+    roll_e.focus_set()
+
+    result_card = _card(win, padx=16, pady=12)
+    result_card.pack(padx=30, pady=(4,8), fill="x")
+
+    res_var = tk.StringVar(value="Enter a roll number and press Search.")
+    _label(result_card, textvariable=res_var, fg=TEXT, font=FT_MONO,
+           bg=CARD, justify="left").pack(anchor="w")
+
+    def search():
+        roll = roll_e.get().strip()
+        if not roll:
+            res_var.set("  ⚠ Enter a roll number.")
+            return
+        try:
+            student = fetch_student_by_roll(roll)
+        except Exception as e:
+            res_var.set(f"  ✕ Error: {e}")
+            return
+        if student:
+            res_var.set(
+            f"  Name    :  {student[1]}\n"
+            f"  Roll No :  {student[2]}\n"
+            f"  Course  :  {student[3]}"
+        )
+        else:
+            res_var.set("  No student found with that roll number.")
+    btn_row = tk.Frame(win, bg=BG)
+    btn_row.pack(side="bottom", pady=12)
+    btn(btn_row, "  Search", search, w=14).pack(side="left", padx=6)
+    btn(btn_row, "  Close", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left")
+
+    win.bind("<Return>", lambda e: search())
+
+
+# ═══════════════════════════════════════════════════
+#  MODAL — MARKSHEET
+# ═══════════════════════════════════════════════════
+
+def view_marksheet(prefill_roll=None):
+    win = _modal("Student Marksheet", 480, 440)
+
+    _label(win, "MARKSHEET", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(22, 6))
+    _sep(win)
+
+    row = tk.Frame(win, bg=BG)
+    row.pack(padx=30, pady=6, fill="x")
+    _label(row, "Roll Number", fg=SUBTEXT, bg=BG).pack(anchor="w", pady=(0, 4))
+    roll_e = _entry(row)
+    roll_e.pack(fill="x")
+    if prefill_roll:
+        roll_e.insert(0, prefill_roll)
+    roll_e.focus_set()
+
+    sheet_frame = _card(win, padx=16, pady=12)
+    sheet_frame.pack(padx=30, pady=10, fill="both", expand=True)
+
+    # Scrollable text widget
+    sb  = tk.Scrollbar(sheet_frame)
+    sb.pack(side="right", fill="y")
+    txt = tk.Text(sheet_frame, font=FT_MONO, bg=PANEL, fg=TEXT,
+                  relief="flat", bd=0, yscrollcommand=sb.set,
+                  state="disabled", height=10)
+    txt.pack(fill="both", expand=True)
+    sb.config(command=txt.yview)
+
+    # Tag colours
+    txt.tag_config("header", foreground=ACCENT, font=("Consolas", 11, "bold"))
+    txt.tag_config("pass",   foreground=ACCENT2)
+    txt.tag_config("fail",   foreground=DANGER)
+    txt.tag_config("muted",  foreground=SUBTEXT)
+
+    def _write(text, tag=None):
+        txt.config(state="normal")
+        txt.insert(tk.END, text, tag or "")
+        txt.config(state="disabled")
+
+    def show_marks():
+        txt.config(state="normal")
+        txt.delete("1.0", tk.END)
+        txt.config(state="disabled")
+
+        roll = roll_e.get().strip()
+        if not roll:
+            toast("Enter a roll number.", "warn")
+            return
+        try:
+            student    = fetch_student_by_roll(roll)
+            student_id = get_student_id_by_roll(roll)
+            print(f"DEBUG: roll={roll!r}, student_id={student_id}")
+        except Exception as e:
+            _write(f"Error: {e}", "fail")
+            return
+
+        if not student or not student_id:
+            _write("  Student not found.", "fail")
+            return
+
+        marks = get_marks_by_student(student_id)
+
+        _write(f"  {'─'*36}\n", "muted")
+        _write(f"  Name    :  {student[1]}\n", "header")
+        _write(f"  Roll No :  {student[2]}\n")
+        _write(f"  Course  :  {student[3]}\n")
+        _write(f"  {'─'*36}\n", "muted")
+
+        if not marks:
+            _write("  No marks on record.\n", "muted")
+            return
+
+        total = 0
+        for subject, mark in marks:
+            status_tag = "pass" if mark >= 40 else "fail"
+            grade      = _grade(mark)
+            _write(f"  {subject:<20} {mark:>3}/100   {grade}\n", status_tag)
+            total += mark
+
+        pct = round(total / len(marks), 1)
+        _write(f"  {'─'*36}\n", "muted")
+        _write(f"  Total     : {total}\n")
+        _write(f"  Average   : {pct}%\n")
+        result_tag = "pass" if pct >= 40 else "fail"
+        result_txt = "PASS ✓" if pct >= 40 else "FAIL ✗"
+        _write(f"  Result    : {result_txt}\n", result_tag)
+
+    btn_row = tk.Frame(win, bg=BG)
+    btn_row.pack(pady=8)
+    btn(btn_row, "  Show Marksheet", show_marks, w=18).pack(side="left", padx=6)
+    btn(btn_row, "  Close", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left")
+
+    win.bind("<Return>", lambda e: show_marks())
+
+    if prefill_roll:
+        show_marks()
+
+
+def _grade(mark):
+    if mark >= 90: return "A+"
+    if mark >= 80: return "A"
+    if mark >= 70: return "B+"
+    if mark >= 60: return "B"
+    if mark >= 50: return "C"
+    if mark >= 40: return "D"
+    return "F"
+
+
+# ═══════════════════════════════════════════════════
+#  MODAL — TOP RANKERS
+# ═══════════════════════════════════════════════════
+
+def view_top_rankers():
+    win = _modal("Top Rankers", 500, 400)
+
+    _label(win, "🏆  TOP RANKERS", font=FT_HEAD, fg=WARN, bg=BG).pack(pady=(22, 6))
+    _sep(win)
+
+    try:
+        rankers = get_top_rankers(10)
+    except Exception as e:
+        messagebox.showerror("Error", str(e), parent=win)
+        win.destroy()
+        return
+
+    # Treeview table
+    style = ttk.Style()
+    style.theme_use("default")
+    style.configure("Dark.Treeview",
+                    background=CARD, foreground=TEXT,
+                    fieldbackground=CARD, rowheight=28,
+                    font=FT_MONO)
+    style.configure("Dark.Treeview.Heading",
+                    background=PANEL, foreground=ACCENT,
+                    font=("Consolas", 10, "bold"), relief="flat")
+    style.map("Dark.Treeview", background=[("selected", HOVER)])
+
+    cols = ("#", "Name", "Roll No", "Course", "Total")
+    tree = ttk.Treeview(win, columns=cols, show="headings",
+                        style="Dark.Treeview", height=12)
+
+    widths = [40, 160, 90, 120, 70]
+    for col, w in zip(cols, widths):
+        tree.heading(col, text=col)
+        tree.column(col, width=w, anchor="center" if col in ("#", "Total") else "w")
+
+    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
+    for i, (name, roll, course, total) in enumerate(rankers, 1):
+        label = f"{medals.get(i, str(i))}"
+        tree.insert("", "end", values=(label, name, roll, course, total))
+
+    tree.pack(padx=20, pady=10, fill="both", expand=True)
+
+    btn(win, "  Close", win.destroy, color=CARD, fg=TEXT, w=12).pack(pady=8)
+
+
+# ═══════════════════════════════════════════════════
+#  PASS / FAIL ANALYTICS  (pie + bar side-by-side)
+# ═══════════════════════════════════════════════════
+
+def show_pass_percentage():
+    try:
+        passed, failed = get_pass_fail_stats()
+    except Exception as e:
+        messagebox.showerror("Error", str(e))
+        return
+
+    total = passed + failed
+    if total == 0:
+        toast("No result data available.", "warn")
+        return
+
+    win = _modal("Result Analytics", 780, 420)
+    _label(win, "RESULT ANALYTICS", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(16, 4))
+    _sep(win)
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(8.2, 3.8),
+                                    facecolor="#161B22")
+
+    pct_pass = passed / total * 100
+    pct_fail = 100 - pct_pass
+
+    # Pie
+    ax1.pie([passed, failed],
+            labels=["Pass", "Fail"],
+            autopct="%1.1f%%",
+            startangle=90,
+            colors=[ACCENT2, DANGER],
+            explode=(0.05, 0.05),
+            textprops={"color": TEXT, "fontsize": 10})
+    ax1.set_title("Pass vs Fail", color=ACCENT, pad=10)
+    ax1.set_facecolor(PANEL)
+
+    # Bar
+    bars = ax2.bar(["Passed", "Failed"], [passed, failed],
+                   color=[ACCENT2, DANGER], width=0.4)
+    ax2.set_facecolor(PANEL)
+    ax2.tick_params(colors=TEXT)
+    ax2.spines[:].set_color(BORDER)
+    ax2.set_title("Student Count", color=ACCENT, pad=10)
+    for bar in bars:
+        ax2.text(bar.get_x() + bar.get_width()/2,
+                 bar.get_height() + 0.2,
+                 str(int(bar.get_height())),
+                 ha="center", color=TEXT, fontsize=10)
+
+    fig.tight_layout(pad=2)
+
+    canvas = FigureCanvasTkAgg(fig, master=win)
+    canvas.draw()
+    canvas.get_tk_widget().pack(fill="both", expand=True, padx=16, pady=6)
+
+    summary = (f"Total: {total}   |   "
+               f"Passed: {passed} ({pct_pass:.1f}%)   |   "
+               f"Failed: {failed} ({pct_fail:.1f}%)")
+    _label(win, summary, fg=SUBTEXT, font=FT_SMALL, bg=BG).pack(pady=(0, 8))
+
+
+# ═══════════════════════════════════════════════════
+#  EXPORT
+# ═══════════════════════════════════════════════════
+
+def export_results():
+    try:
+        file_path = export_real_data()
+        if file_path:
+            toast(f"Exported → {file_path}", "success")
+        else:
+            toast("Export failed.", "error")
+    except Exception as e:
+        messagebox.showerror("Export Error", str(e))
+
+
+# ═══════════════════════════════════════════════════
+#  RESULT ANALYZER  (bar chart per student)
+# ═══════════════════════════════════════════════════
+
+def open_result_analyzer():
+    win = _modal("Result Analyzer", 640, 460)
+    _label(win, "RESULT ANALYZER", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(20, 6))
+    _sep(win)
+
+    row = tk.Frame(win, bg=BG)
+    row.pack(padx=30, pady=6, fill="x")
+    _label(row, "Roll Number", fg=SUBTEXT, bg=BG).pack(anchor="w", pady=(0, 4))
+    roll_e = _entry(row)
+    roll_e.pack(fill="x")
+    roll_e.focus_set()
+
+    chart_frame = tk.Frame(win, bg=BG)
+    chart_frame.pack(fill="both", expand=True, padx=16, pady=6)
+
+    current_canvas = [None]
+
+    def analyze():
+        roll = roll_e.get().strip()
+        if not roll:
+            toast("Enter a roll number.", "warn")
+            return
+        try:
+            student    = fetch_student_by_roll(roll)
+            student_id = get_student_id_by_roll(roll)
+        except Exception as e:
+            toast(str(e), "error")
+            return
+        if not student or not student_id:
+            toast("Student not found.", "error")
+            return
+
+        marks = get_marks_by_student(student_id)
+        if not marks:
+            toast("No marks found for this student.", "warn")
+            return
+
+        subjects = [m[0] for m in marks]
+        values   = [m[1] for m in marks]
+        colors   = [ACCENT2 if v >= 40 else DANGER for v in values]
+
+        # Destroy old chart
+        if current_canvas[0]:
+            current_canvas[0].get_tk_widget().destroy()
+
+        fig, ax = plt.subplots(figsize=(6.2, 3.2), facecolor=BG)
+        bars = ax.bar(subjects, values, color=colors, width=0.5)
+        ax.set_facecolor(PANEL)
+        ax.axhline(40, color=WARN, linewidth=1.2, linestyle="--", label="Pass mark (40)")
+        ax.tick_params(colors=TEXT, labelsize=9)
+        ax.spines[:].set_color(BORDER)
+        ax.set_ylim(0, 110)
+        ax.set_title(f"{student[1]}  —  {student[3]}", color=ACCENT, pad=8)
+        ax.legend(facecolor=CARD, edgecolor=BORDER, labelcolor=TEXT, fontsize=8)
+        for bar, v in zip(bars, values):
+            ax.text(bar.get_x() + bar.get_width()/2, v + 1.5,
+                    str(v), ha="center", color=TEXT, fontsize=9)
+        fig.tight_layout()
+
+        c = FigureCanvasTkAgg(fig, master=chart_frame)
+        c.draw()
+        c.get_tk_widget().pack(fill="both", expand=True)
+        current_canvas[0] = c
+
+    btn_row = tk.Frame(win, bg=BG)
+    btn_row.pack(pady=8)
+    btn(btn_row, "  Analyze", analyze, w=14).pack(side="left", padx=6)
+    btn(btn_row, "  Close", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left")
+
+    win.bind("<Return>", lambda e: analyze())
+
+
+# ═══════════════════════════════════════════════════
+#  MANAGE STUDENTS  (list all with delete option)
+# ═══════════════════════════════════════════════════
+
+def open_manage_students():
+    win = _modal("Manage Students", 580, 440)
+    _label(win, "MANAGE STUDENTS", font=FT_HEAD, fg=ACCENT, bg=BG).pack(pady=(20, 6))
+    _sep(win)
+
+    style = ttk.Style()
+    style.theme_use("default")
+    style.configure("Dark.Treeview",
+                    background=CARD, foreground=TEXT,
+                    fieldbackground=CARD, rowheight=28, font=FT_MONO)
+    style.configure("Dark.Treeview.Heading",
+                    background=PANEL, foreground=ACCENT,
+                    font=("Consolas", 10, "bold"), relief="flat")
+    style.map("Dark.Treeview", background=[("selected", HOVER)])
+
+    cols = ("ID", "Name", "Roll No", "Course")
+    tree = ttk.Treeview(win, columns=cols, show="headings",
+                        style="Dark.Treeview", height=12)
+    for col, w in zip(cols, [50, 180, 100, 160]):
+        tree.heading(col, text=col)
+        tree.column(col, width=w, anchor="w")
+    tree.pack(padx=20, pady=10, fill="both", expand=True)
+
+    def load():
+        tree.delete(*tree.get_children())
+        conn = sqlite3.connect("student_portal.db")
+        rows = conn.execute("SELECT id, name, roll_no, course FROM students ORDER BY name").fetchall()
+        conn.close()
+        for r in rows:
+            tree.insert("", "end", values=r)
+
+    def delete_selected():
+        sel = tree.selection()
+        if not sel:
+            toast("Select a student to delete.", "warn")
+            return
+        vals = tree.item(sel[0])["values"]
+        if not messagebox.askyesno("Confirm Delete",
+                                   f"Delete '{vals[1]}' ({vals[2]})?\nThis also removes their marks.",
+                                   parent=win):
+            return
+        conn = sqlite3.connect("student_portal.db")
+        conn.execute("DELETE FROM marks WHERE student_id = ?", (vals[0],))
+        conn.execute("DELETE FROM students WHERE id = ?", (vals[0],))
+        conn.commit()
+        conn.close()
+        toast(f"'{vals[1]}' deleted.", "warn")
+        load()
+
+    btn_row = tk.Frame(win, bg=BG)
+    btn_row.pack(pady=6)
+    btn(btn_row, "  Refresh", load, w=12).pack(side="left", padx=6)
+    btn(btn_row, "  Delete Selected", delete_selected, color=DANGER, fg=TEXT, w=18).pack(side="left", padx=6)
+    btn(btn_row, "  Close", win.destroy, color=CARD, fg=TEXT, w=10).pack(side="left", padx=6)
+
+    load()
+
+
+# ═══════════════════════════════════════════════════
+#  ADMIN DASHBOARD
+# ═══════════════════════════════════════════════════
+
+def _build_admin(frame):
+    # ── Top bar ──
+    topbar = tk.Frame(frame, bg=PANEL, height=52)
+    topbar.pack(fill="x")
+    topbar.pack_propagate(False)
+
+    tk.Frame(topbar, bg=ACCENT, width=4).pack(side="left", fill="y")
+    _label(topbar, "  STUDENT PORTAL", font=("Consolas", 13, "bold"),
+           fg=ACCENT, bg=PANEL).pack(side="left", padx=8)
+
+    name_lbl = _label(topbar, "", fg=SUBTEXT, font=FT_SMALL, bg=PANEL)
+    name_lbl.pack(side="left", padx=16)
+
+    btn(topbar, "Logout", _logout, color=DANGER, fg=TEXT, w=10, pad=4).pack(
+        side="right", padx=14, pady=10)
+
+    # ── Body ──
+    body = tk.Frame(frame, bg=BG)
+    body.pack(fill="both", expand=True)
+
+    # ── Sidebar ──
+    sidebar = tk.Frame(body, bg=PANEL, width=200)
+    sidebar.pack(side="left", fill="y")
+    sidebar.pack_propagate(False)
+
+    _label(sidebar, "NAVIGATION", fg=SUBTEXT, font=FT_SMALL, bg=PANEL).pack(
+        pady=(20, 8), padx=16, anchor="w")
+    tk.Frame(sidebar, bg=BORDER, height=1).pack(fill="x", padx=12, pady=2)
+
+    content = tk.Frame(body, bg=BG)
+    content.pack(side="left", fill="both", expand=True)
+
+    def nav_btn(icon, text, cmd):
+        f = tk.Frame(sidebar, bg=PANEL, cursor="hand2")
+        f.pack(fill="x", pady=1)
+        lbl = tk.Label(f, text=f"  {icon}  {text}", font=FT_SMALL,
+                       bg=PANEL, fg=TEXT, anchor="w", pady=9)
+        lbl.pack(fill="x")
+        for w in (f, lbl):
+            w.bind("<Enter>",  lambda e, x=f, y=lbl: (x.config(bg=HOVER), y.config(bg=HOVER)))
+            w.bind("<Leave>",  lambda e, x=f, y=lbl: (x.config(bg=PANEL), y.config(bg=PANEL)))
+            w.bind("<Button-1>", lambda e: cmd())
+
+    def refresh():
+        _refresh_stats(stats_labels)
+
+    nav_btn("＋", "Add Student",      lambda: open_add_student(refresh))
+    nav_btn("✎",  "Add / Edit Marks", lambda: open_add_marks(refresh))
+    nav_btn("🔍", "Search Student",   search_student)
+    nav_btn("📋", "Marksheet",        view_marksheet)
+    nav_btn("📊", "Result Analyzer",  open_result_analyzer)
+    nav_btn("🏆", "Top Rankers",      view_top_rankers)
+    nav_btn("👥", "Manage Students",  open_manage_students)
+    nav_btn("📈", "Pass / Fail %",    show_pass_percentage)
+    nav_btn("💾", "Export Results",   export_results)
+
+    # ── Dashboard content ──
+    _label(content, f"ADMIN DASHBOARD", font=FT_TITLE,
+           fg=ACCENT, bg=BG).pack(pady=(32, 4), padx=30, anchor="w")
+    _label(content, "Overview of student portal activity",
+           fg=SUBTEXT, font=FT_SMALL, bg=BG).pack(padx=30, anchor="w")
+    _sep(content)
+
+    # Live stats row
+    stats_row = tk.Frame(content, bg=BG)
+    stats_row.pack(padx=24, pady=12, anchor="w")
+
+    stats_labels = {}
+
+    def stat_card(parent, title, key, color):
+        c = _card(parent, padx=20, pady=14)
+        c.pack(side="left", padx=8)
+        val_lbl = _label(c, "—", font=("Consolas", 26, "bold"), fg=color, bg=CARD)
+        val_lbl.pack()
+        _label(c, title, fg=SUBTEXT, font=FT_SMALL, bg=CARD).pack()
+        stats_labels[key] = val_lbl
+
+    stat_card(stats_row, "Total Students", "students", ACCENT)
+    stat_card(stats_row, "Subjects",       "subjects", WARN)
+    stat_card(stats_row, "Pass Rate",      "rate",     ACCENT2)
+
+    _refresh_stats(stats_labels)
+
+    # Quick-action buttons
+    _sep(content)
+    _label(content, "QUICK ACTIONS", fg=SUBTEXT, font=FT_SMALL, bg=BG).pack(
+        padx=30, anchor="w", pady=(4, 8))
+
+    qa = tk.Frame(content, bg=BG)
+    qa.pack(padx=24, anchor="w")
+
+    def qa_btn(text, cmd, color=ACCENT):
+        btn(qa, text, cmd, color=color, w=16, pad=6).pack(side="left", padx=6)
+
+    qa_btn("+ Add Student",  lambda: open_add_student(refresh))
+    qa_btn("✎ Add Marks",    lambda: open_add_marks(refresh))
+    qa_btn("📊 Analyzer",    open_result_analyzer, color=WARN)
+    qa_btn("💾 Export",      export_results,        color=CARD)
+
+    return name_lbl
+
+
+def _refresh_stats(labels):
+    stu, sub, rate = _get_live_stats()
+    labels["students"].config(text=str(stu))
+    labels["subjects"].config(text=str(sub))
+    labels["rate"].config(text=str(rate))
+
+
+# ═══════════════════════════════════════════════════
+#  STUDENT DASHBOARD
+# ═══════════════════════════════════════════════════
+
+def _build_student(frame):
+    topbar = tk.Frame(frame, bg=PANEL, height=52)
+    topbar.pack(fill="x")
+    topbar.pack_propagate(False)
+
+    tk.Frame(topbar, bg=ACCENT2, width=4).pack(side="left", fill="y")
+    _label(topbar, "  STUDENT PORTAL", font=("Consolas", 13, "bold"),
+           fg=ACCENT2, bg=PANEL).pack(side="left", padx=8)
+
+    name_lbl = _label(topbar, "", fg=SUBTEXT, font=FT_SMALL, bg=PANEL)
+    name_lbl.pack(side="left", padx=16)
+
+    btn(topbar, "Logout", _logout, color=DANGER, fg=TEXT, w=10, pad=4).pack(
+        side="right", padx=14, pady=10)
+
+    body = tk.Frame(frame, bg=BG)
+    body.pack(fill="both", expand=True, padx=40, pady=30)
+
+    _label(body, "STUDENT DASHBOARD", font=FT_TITLE, fg=ACCENT2, bg=BG).pack(anchor="w")
+    _label(body, "Access your academic records below.",
+           fg=SUBTEXT, font=FT_SMALL, bg=BG).pack(anchor="w", pady=(4, 20))
+    _sep(body)
+
+    tile_row = tk.Frame(body, bg=BG)
+    tile_row.pack(pady=20)
+
+    def tile(icon, title, subtitle, cmd, color):
+        c = _card(tile_row, padx=20, pady=20, cursor="hand2")
+        c.pack(side="left", padx=10)
+        _label(c, icon, font=("Consolas", 26), fg=color, bg=CARD).pack()
+        _label(c, title,    font=("Consolas", 11, "bold"), fg=TEXT,   bg=CARD).pack(pady=(6, 2))
+        _label(c, subtitle, font=FT_SMALL,                  fg=SUBTEXT, bg=CARD).pack()
+        for w in c.winfo_children() + [c]:
+            w.bind("<Button-1>", lambda e: cmd())
+            w.bind("<Enter>", lambda e: c.config(highlightbackground=color))
+            w.bind("<Leave>", lambda e: c.config(highlightbackground=BORDER))
+
+    tile("📋", "My Marksheet",   "Subjects & grades",   view_marksheet,       ACCENT)
+    tile("📊", "My Result",      "Pass / Fail status",  view_marksheet,       ACCENT2)
+    tile("🏆", "Class Rankers",  "Top 10 students",     view_top_rankers,     WARN)
+    tile("📈", "Analytics",      "My performance chart",open_result_analyzer, ACCENT)
+
+    return name_lbl
+
+
+# ═══════════════════════════════════════════════════
+#  WINDOW LIFECYCLE
+# ═══════════════════════════════════════════════════
+
+_admin_name_lbl   = None
+_student_name_lbl = None
+
+
+def _logout():
+    global root, login_root
+    if root:
+        root.destroy()
+        root = None
+    if login_root:
+        login_root.deiconify()
+
+
+def _close():
+    global root, login_root
+    if root:
+        root.destroy()
+        root = None
+    if login_root:
+        login_root.destroy()
+        login_root = None
+
+
+def start_app(role, username, parent_root=None):
+    global root, login_root, current_username, current_role
+    global _admin_name_lbl, _student_name_lbl
+
+    login_root       = parent_root
+    current_username = username
+    current_role     = role
+
+    init_db()
+
+    root = tk.Toplevel(login_root) if login_root else tk.Tk()
+    root.title("Student Portal")
+    root.configure(bg=BG)
+    root.resizable(True, True)
+    root.protocol("WM_DELETE_WINDOW", _close)
+    _center(root, 860, 560)
+    root.minsize(720, 480)
+
+    if role == "admin":
+        frame = tk.Frame(root, bg=BG)
+        frame.pack(fill="both", expand=True)
+        lbl = _build_admin(frame)
+        lbl.config(text=f"Logged in as  {username}")
+    else:
+        frame = tk.Frame(root, bg=BG)
+        frame.pack(fill="both", expand=True)
+        lbl = _build_student(frame)
+        lbl.config(text=f"Logged in as  {username}")
+
+    if not login_root:
+        root.mainloop()
+
+
+# ═══════════════════════════════════════════════════
+#  STANDALONE TEST
+# ═══════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    start_app("admin", "admin")
